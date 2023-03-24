@@ -1,10 +1,11 @@
 import numpy as np
 
 from .data import Data
+from .. import gradients as grad
 from .. import backend as bkd
 from .. import config
 from ..backend import backend_name
-from ..utils import get_num_args, run_if_all_none
+from ..utils import get_num_args, run_if_all_none, burgers_helpers
 
 
 class PDE(Data):
@@ -114,6 +115,25 @@ class PDE(Data):
         self.train_next_batch()
         self.test()
 
+        self.testdata = None
+
+    
+    def losses_test(self, targets, outputs, loss_fn, inputs, model, aux=None):
+        import sys
+        mypath = "/home/elhamod/projects/deepxde" #TODO: fix the need for this
+        sys.path.insert(0, mypath)
+        import deepxde as dde
+   
+        import torch
+
+        X, y_true = burgers_helpers.gen_testdata() #NOTE: this only takes residual error. Maybe we can add data error later
+        # y_pred = model.predict(X)
+        f = model.predict(X, operator=burgers_helpers.Burgers_pde)
+        result = torch.tensor(f).pow(2).mean().cpu().detach()
+
+        return result
+
+    
     def losses(self, targets, outputs, loss_fn, inputs, model, aux=None):
         if backend_name in ["tensorflow.compat.v1", "tensorflow", "pytorch", "paddle"]:
             outputs_pde = outputs

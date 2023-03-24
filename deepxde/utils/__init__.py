@@ -6,6 +6,7 @@ import sys
 from . import array_ops_compat
 from .external import *
 from .internal import *
+from . import burgers_helpers
 from ..backend import backend_name
 
 

@@ -10,6 +10,8 @@ import scipy.spatial.distance
 from mpl_toolkits.mplot3d import Axes3D
 from sklearn import preprocessing
 
+import pandas as pd
+
 
 class PointSet:
     """A set of points.
@@ -175,12 +177,12 @@ def saveplot(
         save_best_state(train_state, train_fname, test_fname)
 
     if isplot:
-        plot_loss_history(loss_history)
-        plot_best_state(train_state)
+        plot_loss_history(loss_history, output_dir)
+        # plot_best_state(train_state, os.path.join(output_dir, "best_state.pdf"))
         plt.show()
 
 
-def plot_loss_history(loss_history, fname=None):
+def plot_loss_history(loss_history, output_dir=None):
     """Plot the training and testing loss history.
 
     Note:
@@ -206,9 +208,45 @@ def plot_loss_history(loss_history, fname=None):
         )
     plt.xlabel("# Steps")
     plt.legend()
-
+    fname = os.path.join(output_dir, "loss_history.pdf")
     if isinstance(fname, str):
         plt.savefig(fname)
+
+
+    plt.figure()
+    plt.xlabel("# Steps")
+    loss_train = np.array(loss_history.loss_train)
+    for i in range(loss_train.shape[-1]):
+         plt.semilogy(loss_history.steps, loss_train[:, i], label=f'Loss {i + 1}') #TODO: pass task names for figures
+    fname = os.path.join(output_dir, "loss_history_train.pdf")
+    plt.legend()
+    if isinstance(fname, str):
+        plt.savefig(fname)
+
+
+
+    plt.figure()
+    plt.xlabel("# Steps")
+    loss_test = np.array(loss_history.loss_test)
+    for i in range(loss_test.shape[-1]):
+         plt.semilogy(loss_history.steps, loss_test[:, i], label=f'Loss {i + 1}')
+    fname = os.path.join(output_dir, "loss_history_test.pdf")
+    plt.legend()
+    if isinstance(fname, str):
+        plt.savefig(fname)
+
+
+    plt.figure()
+    plt.xlabel("# Steps")
+    loss_weights = np.array(loss_history.loss_weights)
+    for i in range(loss_weights.shape[-1]):
+        plt.plot(loss_history.steps, loss_weights[:, i], label=f'Weight {i + 1}')
+    fname = os.path.join(output_dir, "weighthistory.pdf")
+    plt.legend()
+    if isinstance(fname, str):
+        plt.savefig(fname)
+
+        
 
 
 def save_loss_history(loss_history, fname):
@@ -220,10 +258,21 @@ def save_loss_history(loss_history, fname):
             np.array(loss_history.loss_train),
             np.array(loss_history.loss_test),
             np.array(loss_history.metrics_test),
+            np.array(loss_history.loss_weights),
         )
     )
-    np.savetxt(fname, loss, header="step, loss_train, loss_test, metrics_test")
 
+    header = "step, loss_train, loss_test, metrics_test, loss_weights"
+    np.savetxt(fname, loss, header=header)
+
+    header = ["step"]
+    header = header + ["loss_train"]*len(loss_history.loss_train[0])
+    header = header + ["loss_test"]*len(loss_history.loss_test[0])
+    header = header + ["metrics_test"]*len(loss_history.metrics_test[0])
+    header = header + ["loss_weights"]*len(loss_history.loss_weights[0])
+    df = pd.DataFrame(loss, columns=header)
+    fname_csv = os.path.splitext(fname)[0] + ".csv"
+    df.to_csv(fname_csv, index=False)
 
 def _pack_data(train_state):
     def merge_values(values):

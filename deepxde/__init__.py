@@ -27,6 +27,7 @@ from . import utils
 from .backend import Variable
 from .model import Model
 from .utils import saveplot
+from .utils import burgers_helpers
 
 # Backward compatibility
 from .icbc import (

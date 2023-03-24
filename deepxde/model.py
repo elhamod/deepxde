@@ -29,6 +29,8 @@ class Model:
         self.data = data
         self.net = net
 
+        self.device = torch.zeros(1).device #TODO: better way?
+
         self.opt_name = None
         self.batch_size = None
         self.callbacks = None
@@ -54,6 +56,10 @@ class Model:
             self.opt_state = None
             self.params = None
 
+    @property
+    def epoch(self):
+        return self.train_state.epoch
+    
     @utils.timing
     def compile(
         self,
@@ -113,7 +119,7 @@ class Model:
         print("Compiling model...")
         self.opt_name = optimizer
         loss_fn = losses_module.get(loss)
-        self.losshistory.set_loss_weights(loss_weights)
+        # self.losshistory.set_loss_weights(loss_weights) #NOTE: This doesnt do anything...
         if external_trainable_variables is None:
             self.external_trainable_variables = []
         else:
@@ -293,14 +299,16 @@ class Model:
                 losses = [losses]
             losses = torch.stack(losses)
             # Weighted losses
-            if loss_weights is not None:
-                losses *= torch.as_tensor(loss_weights)
+            # if loss_weights is not None:
+            #     losses *= torch.as_tensor(loss_weights)
             # Clear cached Jacobians and Hessians.
             grad.clear()
             return outputs_, losses
 
         def outputs_losses_train(inputs, targets):
-            return outputs_losses(True, inputs, targets, self.data.losses_train)
+            outputs_, losses = outputs_losses(True, inputs, targets, self.data.losses_train)
+            self.train_loss_buffer[:, self.train_state.epoch-1] = losses.cpu().detach().numpy() #NOTE: we need -1 because increment of epoch happens before this. maybe clean this up later
+            return outputs_, losses
 
         def outputs_losses_test(inputs, targets):
             return outputs_losses(False, inputs, targets, self.data.losses_test)
@@ -309,7 +317,7 @@ class Model:
         # https://pytorch.org/docs/stable/optim.html#per-parameter-options,
         # but not all optimizers (such as L-BFGS) support this.
         trainable_variables = (
-            list(self.net.parameters()) + self.external_trainable_variables
+            list(self.parameters()) + self.external_trainable_variables
         )
         if self.net.regularizer is None:
             self.opt, self.lr_scheduler = optimizers.get(
@@ -333,9 +341,13 @@ class Model:
         def train_step(inputs, targets):
             def closure():
                 losses = outputs_losses_train(inputs, targets)[1]
-                total_loss = torch.sum(losses)
+                # total_loss = torch.sum(losses)
                 self.opt.zero_grad()
-                total_loss.backward()
+
+                # total_loss.backward()
+                self.train_state.loss_weights = self.backward(losses, **self.kwargs['weight_args'])
+                total_loss = torch.sum(torch.mul(losses, torch.tensor(self.train_state.loss_weights)))
+                
                 return total_loss
 
             self.opt.step(closure)
@@ -588,6 +600,8 @@ class Model:
             )
             iterations = epochs
         self.batch_size = batch_size
+        self.model_save_path = model_save_path
+
         self.callbacks = CallbackList(callbacks=callbacks)
         self.callbacks.set_model(self)
         if disregard_previous_best:
@@ -608,6 +622,8 @@ class Model:
         self.train_state.set_data_train(*self.data.train_next_batch(self.batch_size))
         self.train_state.set_data_test(*self.data.test())
         self._test()
+        if self.model_save_path is not None:
+            self.save(self.model_save_path, verbose=1)
         self.callbacks.on_train_begin()
         if optimizers.is_external_optimizer(self.opt_name):
             if backend_name == "tensorflow.compat.v1":
@@ -624,10 +640,9 @@ class Model:
             self._train_sgd(iterations, display_every)
         self.callbacks.on_train_end()
 
-        print("")
         display.training_display.summary(self.train_state)
         if model_save_path is not None:
-            self.save(model_save_path, verbose=1)
+            self.save(model_save_path, verbose=1, last=True)
         return self.losshistory, self.train_state
 
     def _train_sgd(self, iterations, display_every):
@@ -648,6 +663,8 @@ class Model:
             self.train_state.step += 1
             if self.train_state.step % display_every == 0 or i + 1 == iterations:
                 self._test()
+                if self.model_save_path is not None:
+                    self.save(self.model_save_path, verbose=1)
 
             self.callbacks.on_batch_end()
             self.callbacks.on_epoch_end()
@@ -807,6 +824,9 @@ class Model:
             self.train_state.test_aux_vars,
         )
 
+        if self.train_state.loss_weights is None:
+            self.train_state.loss_weights = np.ones_like(self.train_state.loss_train) #NOTE: we will assume initial weights are all 1s
+
         if isinstance(self.train_state.y_test, (list, tuple)):
             self.train_state.metrics_test = [
                 m(self.train_state.y_test[i], self.train_state.y_pred_test[i])
@@ -825,6 +845,7 @@ class Model:
             self.train_state.loss_train,
             self.train_state.loss_test,
             self.train_state.metrics_test,
+            self.train_state.loss_weights
         )
 
         if (
@@ -956,7 +977,7 @@ class Model:
             )
         return destination
 
-    def save(self, save_path, protocol="backend", verbose=0):
+    def save(self, save_path, protocol="backend", verbose=0, last=False):
         """Saves all variables to a disk file.
 
         Args:
@@ -976,7 +997,7 @@ class Model:
             string: Path where model is saved.
         """
         # TODO: backend tensorflow
-        save_path = f"{save_path}-{self.train_state.epoch}"
+        save_path = f"{save_path}-{self.train_state.epoch if not last else 'last'}"
         if protocol == "pickle":
             save_path += ".pkl"
             with open(save_path, "wb") as f:
@@ -990,10 +1011,11 @@ class Model:
                 self.net.save_weights(save_path)
             elif backend_name == "pytorch":
                 save_path += ".pt"
-                checkpoint = {
-                    "model_state_dict": self.net.state_dict(),
-                    "optimizer_state_dict": self.opt.state_dict(),
-                }
+                # checkpoint = {
+                #     "model_state_dict": self.net.state_dict(),
+                #     "optimizer_state_dict": self.opt.state_dict(),
+                # }
+                checkpoint = self.net.state_dict()
                 torch.save(checkpoint, save_path)
             elif backend_name == "paddle":
                 save_path += ".pdparams"
@@ -1077,6 +1099,8 @@ class TrainState:
         self.y_std_test = None
         self.metrics_test = None
 
+        self.loss_weights = None
+
         # The best results correspond to the min train loss
         self.best_step = 0
         self.best_loss_train = np.inf
@@ -1114,14 +1138,15 @@ class LossHistory:
         self.loss_train = []
         self.loss_test = []
         self.metrics_test = []
-        self.loss_weights = None
+        self.loss_weights = []
 
-    def set_loss_weights(self, loss_weights):
-        self.loss_weights = loss_weights
+    # def set_loss_weights(self, loss_weights):
+    #     self.loss_weights = loss_weights
 
-    def append(self, step, loss_train, loss_test, metrics_test):
+    def append(self, step, loss_train, loss_test, metrics_test, loss_weights):
         self.steps.append(step)
         self.loss_train.append(loss_train)
+        self.loss_weights.append(loss_weights)
         if loss_test is None:
             loss_test = self.loss_test[-1]
         if metrics_test is None:
