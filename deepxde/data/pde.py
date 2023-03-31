@@ -120,8 +120,10 @@ class PDE(Data):
     
     def losses_test(self, targets, outputs, loss_fn, inputs, model, aux=None):
         import sys
+        import os
         mypath = "/home/elhamod/projects/deepxde" #TODO: fix the need for this
-        sys.path.insert(0, mypath)
+        if os.path.exists(mypath) and mypath not in sys.path:
+            sys.path.insert(0, mypath)
         import deepxde as dde
    
         import torch
